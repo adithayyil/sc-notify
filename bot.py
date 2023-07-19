@@ -44,12 +44,17 @@ client = discord.Client(intents=discord.Intents.default())
 
 previous_track_ids = {user: None for user in SOUNDCLOUD_USERS}
 
-def fetch_tracks(user_id):
-    url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
-    response = requests.get(url, params=tracks_params, headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    return None
+async def fetch_track_with_stream_url(user_id):
+    while True:
+        url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
+        response = requests.get(url, params=tracks_params, headers=headers)
+        if response.status_code == 200:
+            tracks_data = response.json()
+            # Check if the stream_url_unauthorized is available in the tracks data
+            if all('media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1 for track in tracks_data['collection']):
+                return tracks_data
+        await asyncio.sleep(2)  # Wait for a short duration before retrying
+
 
 def authorize_stream_url(stream_url_unauthorized, track_authID):
     track_params = {
@@ -74,9 +79,6 @@ def download_stream_url(url):
     return False
 
 async def notify_channel(user, track):
-    # Waits for 2s for SoundCloud to process artwork and track
-    await asyncio.sleep(2)
-
     # Gets a bunch of track data from 'tracks'
     track_title = track.get('title')
     track_url = track.get('permalink_url')
@@ -114,7 +116,7 @@ async def check_new_tracks():
     await client.wait_until_ready()
     while not client.is_closed():
         for user, user_id in SOUNDCLOUD_USERS.items():
-            tracks_data = fetch_tracks(user_id)
+            tracks_data = await fetch_track_with_stream_url(user_id)
             if tracks_data:
                 latest_track_id = None
                 for track in tracks_data['collection']:
