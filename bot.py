@@ -53,7 +53,7 @@ async def fetch_track_with_stream_url(user_id):
             # Check if the stream_url_unauthorized is available in the tracks data
             if all('media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1 for track in tracks_data['collection']):
                 return tracks_data
-        await asyncio.sleep(2)  # Wait for a short duration before retrying
+        await asyncio.sleep(2)  # Wait for 2s before retrying
 
 
 def authorize_stream_url(stream_url_unauthorized, track_authID):
@@ -78,36 +78,45 @@ def download_stream_url(url):
         return True
     return False
 
-async def notify_channel(user, track):
+async def send_track_data(target_channel, track_data, user):
     # Gets a bunch of track data from 'tracks'
-    track_title = track.get('title')
-    track_url = track.get('permalink_url')
-    track_art_url = track.get('artwork_url')
+    track_title = track_data.get('title')
+    track_url = track_data.get('permalink_url')
+    track_art_url = track_data.get('artwork_url')
     track_ogart_url = track_art_url.replace("large", "original") if track_art_url and "large" in track_art_url else track_art_url
-    track_createdAt_unformatted = track.get('created_at')
+    track_createdAt_unformatted = track_data.get('created_at')
     track_createdAt_formatted = datetime.strptime(track_createdAt_unformatted, '%Y-%m-%dT%H:%M:%SZ').strftime('%A, %B %d, %Y %I:%M:%S %p -0400')
-    track_description = track.get('description')
-    track_id = track.get('id')
-    track_iscommentable = track.get('commentable')
+    track_description = track_data.get('description')
+    track_id = track_data.get('id')
+    track_iscommentable = track_data.get('commentable')
 
+    # Sends music data
+    await target_channel.send(f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Description:** {track_description}\n**Track ID:** {track_id}\n**Is Track Commentable?:** {track_iscommentable}\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> ")
+
+
+async def send_song_file(target_channel, track_data):
+    # Use stream url here
+    track_authID = track_data.get('track_authorization')
+    stream_url_unauthorized = track_data['media']['transcodings'][1]['url']
+    stream_url = authorize_stream_url(stream_url_unauthorized, track_authID)
+
+    if download_stream_url(stream_url):
+        # Sends .mp3
+        with open("temp.mp3", "rb") as music_file:
+            await target_channel.send(file=discord.File(music_file, filename=f"{track_data['title']}.mp3"))
+        os.remove("temp.mp3")
+    else:
+        print("Error: Failed to download the song file.")
+
+
+async def notify_channel(user, track):
     # Only sends notifications to target channel 'notifications'
     target_channel = discord.utils.get(client.get_all_channels(), name='notifications')
     if target_channel:
-        # Sends music data
-        await target_channel.send(f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Description:** {track_description}\n**Track ID:** {track_id}\n**Is Track Commentable?:** {track_iscommentable}\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> ")
+        await send_track_data(target_channel, track, user)
+        await asyncio.sleep(2)  # Wait for 2 seconds before sending the song file
+        await send_song_file(target_channel, track)
 
-        # Use stream url here
-        track_authID = track.get('track_authorization')
-        stream_url_unauthorized = track['media']['transcodings'][1]['url']
-        stream_url = authorize_stream_url(stream_url_unauthorized, track_authID)
-
-        if download_stream_url(stream_url):
-            # Sends .mp3
-            with open("temp.mp3", "rb") as music_file:
-                await target_channel.send(file=discord.File(music_file, filename=f"{track_title}.mp3"))
-            os.remove("temp.mp3")
-    else:
-        print("Error: Channel 'notifications' not found.")
 
 def update_previous_track_id(user, track_id):
     previous_track_ids[user] = track_id
