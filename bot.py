@@ -67,7 +67,7 @@ async def check_new_tracks():
                         track_title = track.get('title')
                         track_url = track.get('permalink_url')
                         track_art_url = track.get('artwork_url')
-                        track_ogart_url = track_art_url.replace("large", "original") if "large" in track_art_url else track_art_url
+                        track_ogart_url = track_art_url.replace("large", "original") if track_art_url and "large" in track_art_url else track_art_url
                         track_createdAt = track.get('created_at')
                         track_description = track.get('description')
 
@@ -85,8 +85,8 @@ async def check_new_tracks():
             else:
                 print(f"Error: Unable to fetch tracks for {user}")
 
-        # Check for new tracks every 3s
-        await asyncio.sleep(3)
+        # Check for new tracks every 1s
+        await asyncio.sleep(1)
 
 @client.event
 async def on_ready():
