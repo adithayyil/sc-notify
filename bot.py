@@ -4,6 +4,8 @@ import asyncio
 import json
 from dotenv import load_dotenv
 import os
+from datetime import datetime
+
 
 load_dotenv()
 
@@ -30,7 +32,7 @@ headers = {
     'Sec-Fetch-Dest': 'empty',
 }
 
-params = {
+tracks_params = {
     'representation': '',
     'client_id': SOUNDCLOUD_CLIENT_ID,
     'limit': '1000',
@@ -40,15 +42,73 @@ params = {
 
 client = discord.Client(intents=discord.Intents.default())
 
-# Dictionary to store the previous fetched track IDs for each user
 previous_track_ids = {user: None for user in SOUNDCLOUD_USERS}
 
 def fetch_tracks(user_id):
     url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
-    response = requests.get(url, params=params, headers=headers)
+    response = requests.get(url, params=tracks_params, headers=headers)
     if response.status_code == 200:
         return response.json()
     return None
+
+def authorize_stream_url(stream_url_unauthorized, track_authID):
+    track_params = {
+        'client_id': SOUNDCLOUD_CLIENT_ID,
+        'track_authorization': track_authID,
+    }
+
+    stream_url = requests.get(
+        stream_url_unauthorized,
+        params=track_params,
+        headers=headers,
+    ).json()['url']
+
+    return stream_url
+
+def download_stream_url(url):
+    response = requests.get(url)
+    if response.status_code == 200:
+        with open("temp.mp3", "wb") as file:
+            file.write(response.content)
+        return True
+    return False
+
+async def notify_channel(user, track):
+    # Waits for 2s for SoundCloud to process artwork and track
+    await asyncio.sleep(2)
+
+    # Gets a bunch of track data from 'tracks'
+    track_title = track.get('title')
+    track_url = track.get('permalink_url')
+    track_art_url = track.get('artwork_url')
+    track_ogart_url = track_art_url.replace("large", "original") if track_art_url and "large" in track_art_url else track_art_url
+    track_createdAt_unformatted = track.get('created_at')
+    track_createdAt_formatted = datetime.strptime(track_createdAt_unformatted, '%Y-%m-%dT%H:%M:%SZ').strftime('%A, %B %d, %Y %I:%M:%S %p -0400')
+    track_description = track.get('description')
+    track_id = track.get('id')
+    track_iscommentable = track.get('commentable')
+
+    # Only sends notifications to target channel 'notifications'
+    target_channel = discord.utils.get(client.get_all_channels(), name='notifications')
+    if target_channel:
+        # Sends music data
+        await target_channel.send(f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Description:** {track_description}\n**Track ID:** {track_id}\n**Is Track Commentable?:** {track_iscommentable}\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> ")
+
+        # Use stream url here
+        track_authID = track.get('track_authorization')
+        stream_url_unauthorized = track['media']['transcodings'][1]['url']
+        stream_url = authorize_stream_url(stream_url_unauthorized, track_authID)
+
+        if download_stream_url(stream_url):
+            # Sends .mp3
+            with open("temp.mp3", "rb") as music_file:
+                await target_channel.send(file=discord.File(music_file, filename=f"{track_title}.mp3"))
+            os.remove("temp.mp3")
+    else:
+        print("Error: Channel 'notifications' not found.")
+
+def update_previous_track_id(user, track_id):
+    previous_track_ids[user] = track_id
 
 async def check_new_tracks():
     await client.wait_until_ready()
@@ -64,24 +124,10 @@ async def check_new_tracks():
                     if previous_track_ids[user] is None:
                         previous_track_ids[user] = latest_track_id
                     elif track_id > previous_track_ids[user]:
-                        track_title = track.get('title')
-                        track_url = track.get('permalink_url')
-                        track_art_url = track.get('artwork_url')
-                        track_ogart_url = track_art_url.replace("large", "original") if track_art_url and "large" in track_art_url else track_art_url
-                        track_createdAt = track.get('created_at')
-                        track_description = track.get('description')
-
-                        # Only sends notifications to target channel 'notifications'
-                        target_channel = discord.utils.get(client.get_all_channels(), name="notifications")
-                        if target_channel:
-                            await target_channel.send(f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt}\n**Description:** {track_description}\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> ")
-                        else:
-                            print("Error: Channel 'notifications' not found.")   
-                                                
-                        # Update the previous track ID for the user
-                        previous_track_ids[user] = track_id
+                        await notify_channel(user, track)
+                        update_previous_track_id(user, track_id)
                 # Update the latest track ID for the user
-                previous_track_ids[user] = latest_track_id
+                update_previous_track_id(user, latest_track_id)
             else:
                 print(f"Error: Unable to fetch tracks for {user}")
 
