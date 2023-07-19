@@ -1,2 +1,1 @@
-# sc-notify
- 
+# SoundCloud Notify
