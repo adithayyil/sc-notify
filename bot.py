@@ -47,13 +47,17 @@ previous_track_ids = {user: None for user in SOUNDCLOUD_USERS}
 async def fetch_track_with_stream_url(user_id):
     while True:
         url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
-        response = requests.get(url, params=tracks_params, headers=headers)
-        if response.status_code == 200:
+        try:
+            response = requests.get(url, params=tracks_params, headers=headers)
+            response.raise_for_status()  # Check for any HTTP error status
             tracks_data = response.json()
             # Check if the stream_url_unauthorized is available in the tracks data
             if all('media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1 for track in tracks_data['collection']):
                 return tracks_data
-        await asyncio.sleep(2)  # Wait for 2s before retrying
+        except (requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
+            print(f"Connection error occurred: {e}")
+            await asyncio.sleep(10)  # Wait for 10 seconds before retrying
+        await asyncio.sleep(2)  # Wait for a short duration before retrying
 
 
 def authorize_stream_url(stream_url_unauthorized, track_authID):
