@@ -82,20 +82,27 @@ async def send_track_data(target_channel, track_data, user):
     # Gets a bunch of track data from 'tracks'
     track_title = track_data.get('title')
     track_url = track_data.get('permalink_url')
+
     track_art_url = track_data.get('artwork_url')
     track_ogart_url = track_art_url.replace("large", "original") if track_art_url and "large" in track_art_url else track_art_url
+
     track_createdAt_unformatted = track_data.get('created_at')
     track_createdAt_formatted = datetime.strptime(track_createdAt_unformatted, '%Y-%m-%dT%H:%M:%SZ').strftime('%A, %B %d, %Y %I:%M:%S %p -0400')
     track_description = track_data.get('description')
     track_id = track_data.get('id')
-    track_iscommentable = track_data.get('commentable')
+
+    track_duration = track_data.get('duration')
+    track_duration_converted = f"{(track_duration // (1000 * 60 * 60)) % 24:02}:{(track_duration // (1000 * 60)) % 60:02}:{(track_duration // 1000) % 60:02}"
+
+    track_genre = track_data.get('genre')
+    track_tags = track_data.get('tag_list')
 
     # Sends music data
-    await target_channel.send(f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Description:** {track_description}\n**Track ID:** {track_id}\n**Is Track Commentable?:** {track_iscommentable}\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> ")
+    await target_channel.send(f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> ")
 
 
 async def send_song_file(target_channel, track_data):
-    # Use stream url here
+    # Gets data from 'tracks' which is used to authorize stream_url to be accessed
     track_authID = track_data.get('track_authorization')
     stream_url_unauthorized = track_data['media']['transcodings'][1]['url']
     stream_url = authorize_stream_url(stream_url_unauthorized, track_authID)
@@ -114,7 +121,7 @@ async def notify_channel(user, track):
     target_channel = discord.utils.get(client.get_all_channels(), name='notifications')
     if target_channel:
         await send_track_data(target_channel, track, user)
-        await asyncio.sleep(2)  # Wait for 2 seconds before sending the song file
+        await asyncio.sleep(1)  # Wait for a bit before sending the song file
         await send_song_file(target_channel, track)
 
 
