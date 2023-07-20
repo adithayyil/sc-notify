@@ -4,7 +4,8 @@
 - Sends metadata for those newly uploaded tracks like title, date, duration, description, etc...
 - Sends artist uploaded song file!
 ## Example
-![lilac-Example](https://github.com/adithayyil/sc-notify/assets/90326965/23f93bf9-c534-4924-8eaa-e512c2b92df0)
+![LILAC-EXAMPLE](https://github.com/adithayyil/sc-notify/assets/90326965/b125a70f-6b79-4d85-a2c4-f8da290b5830)
+
 
 
 ## Todo
@@ -12,3 +13,4 @@
 - [ ] Send notification when previous track amount = 0
 - [x] Find out if there is a way to upload music stream to discord
 - [ ] Add client based custom artist lists to check (with commands) [**IMPORTANT**]
+- [ ] Fix tag_list retrieving as NULL
