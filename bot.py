@@ -129,8 +129,25 @@ async def notify_channel(user, track):
         await send_song_file(target_channel, track)
 
 
-def update_previous_track_id(user, track_id):
-    previous_track_ids[user] = track_id
+previous_track_ids = {user: None for user in SOUNDCLOUD_USERS}
+
+# Function to get the latest track ID for a user from the SoundCloud API
+def get_latest_track_id(user_id):
+    url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
+    response = requests.get(url, params=tracks_params, headers=headers)
+    response.raise_for_status()  # Check for any HTTP error status
+    tracks_data = response.json()
+    if 'collection' in tracks_data and len(tracks_data['collection']) > 0:
+        latest_track_id = max(track['id'] for track in tracks_data['collection'])
+        return latest_track_id
+    return None
+
+# Function to update the previous_track_ids dictionary with the latest track IDs
+def update_previous_track_ids():
+    for user, user_id in SOUNDCLOUD_USERS.items():
+        latest_track_id = get_latest_track_id(user_id)
+        if latest_track_id is not None:
+            previous_track_ids[user] = latest_track_id
 
 async def check_new_tracks():
     await client.wait_until_ready()
@@ -147,9 +164,9 @@ async def check_new_tracks():
                         previous_track_ids[user] = latest_track_id
                     elif track_id > previous_track_ids[user]:
                         await notify_channel(user, track)
-                        update_previous_track_id(user, track_id)
+                        update_previous_track_ids()
                 # Update the latest track ID for the user
-                update_previous_track_id(user, latest_track_id)
+                update_previous_track_ids()
             else:
                 print(f"Error: Unable to fetch tracks for {user}")
 
