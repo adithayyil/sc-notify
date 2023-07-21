@@ -5,6 +5,8 @@ import json
 from dotenv import load_dotenv
 import os
 from datetime import datetime
+import aiohttp
+
 
 
 load_dotenv()
@@ -44,20 +46,13 @@ client = discord.Client(intents=discord.Intents.default())
 
 previous_track_ids = {user: None for user in SOUNDCLOUD_USERS}
 
-async def fetch_track_with_stream_url(user_id):
-    while True:
-        url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
-        try:
-            response = requests.get(url, params=tracks_params, headers=headers)
-            response.raise_for_status()  # Check for any HTTP error status
-            tracks_data = response.json()
-            # Check if the stream_url_unauthorized is available in the tracks data
+async def fetch_track_with_stream_url(session, user_id):
+    url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
+    async with session.get(url, params=tracks_params, headers=headers) as response:
+        if response.status == 200:
+            tracks_data = await response.json()
             if all('media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1 for track in tracks_data['collection']):
                 return tracks_data
-        except (requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
-            print(f"Connection error occurred: {e}")
-            await asyncio.sleep(10)  # Wait for 10 seconds before retrying
-        await asyncio.sleep(2)  # Wait for a short duration before retrying
 
 
 def authorize_stream_url(stream_url_unauthorized, track_authID):
@@ -83,7 +78,6 @@ def download_stream_url(url):
     return False
 
 async def send_track_data(target_channel, track_data, user):
-    # Gets a bunch of track data from 'tracks'
     track_title = track_data.get('title')
     track_url = track_data.get('permalink_url')
 
@@ -101,18 +95,15 @@ async def send_track_data(target_channel, track_data, user):
     track_genre = track_data.get('genre')
     track_tags = track_data.get('tag_list')
 
-    # Sends music data
     await target_channel.send(f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> ")
 
 
 async def send_song_file(target_channel, track_data):
-    # Gets data from 'tracks' which is used to authorize stream_url to be accessed
     track_authID = track_data.get('track_authorization')
     stream_url_unauthorized = track_data['media']['transcodings'][1]['url']
     stream_url = authorize_stream_url(stream_url_unauthorized, track_authID)
 
     if download_stream_url(stream_url):
-        # Sends .mp3
         with open("temp.mp3", "rb") as music_file:
             await target_channel.send(file=discord.File(music_file, filename=f"{track_data['title']}.mp3"))
         os.remove("temp.mp3")
@@ -121,61 +112,69 @@ async def send_song_file(target_channel, track_data):
 
 
 async def notify_channel(user, track):
-    # Only sends notifications to target channel 'notifications'
     target_channel = discord.utils.get(client.get_all_channels(), name='notifications')
     if target_channel:
         await send_track_data(target_channel, track, user)
-        await asyncio.sleep(1)  # Wait for a bit before sending the song file
+        await asyncio.sleep(1) 
         await send_song_file(target_channel, track)
 
 
 previous_track_ids = {user: None for user in SOUNDCLOUD_USERS}
 
-# Function to get the latest track ID for a user from the SoundCloud API
-def get_latest_track_id(user_id):
+async def get_latest_track_id(session, user_id):
     url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
-    response = requests.get(url, params=tracks_params, headers=headers)
-    response.raise_for_status()  # Check for any HTTP error status
-    tracks_data = response.json()
-    if 'collection' in tracks_data and len(tracks_data['collection']) > 0:
-        latest_track_id = max(track['id'] for track in tracks_data['collection'])
-        return latest_track_id
+    async with session.get(url, params=tracks_params, headers=headers) as response:
+        if response.status == 200:
+            tracks_data = await response.json()
+            if 'collection' in tracks_data and len(tracks_data['collection']) > 0:
+                latest_track_id = max(track['id'] for track in tracks_data['collection'])
+                return latest_track_id
     return None
 
-# Function to update the previous_track_ids dictionary with the latest track IDs
-def update_previous_track_ids():
+async def update_previous_track_ids(session):
     for user, user_id in SOUNDCLOUD_USERS.items():
-        latest_track_id = get_latest_track_id(user_id)
+        latest_track_id = await get_latest_track_id(session, user_id)
         if latest_track_id is not None:
             previous_track_ids[user] = latest_track_id
+        else:
+            previous_track_ids[user] = None
 
 async def check_new_tracks():
     await client.wait_until_ready()
-    while not client.is_closed():
-        for user, user_id in SOUNDCLOUD_USERS.items():
-            tracks_data = await fetch_track_with_stream_url(user_id)
-            if tracks_data:
-                latest_track_id = None
-                for track in tracks_data['collection']:
-                    track_id = track['id']
-                    if latest_track_id is None or track_id > latest_track_id:
-                        latest_track_id = track_id
-                    if previous_track_ids[user] is None:
-                        previous_track_ids[user] = latest_track_id
-                    elif track_id > previous_track_ids[user]:
-                        await notify_channel(user, track)
-                        update_previous_track_ids()
-                # Update the latest track ID for the user
-                update_previous_track_ids()
-            else:
-                print(f"Error: Unable to fetch tracks for {user}")
+    async with aiohttp.ClientSession() as session:
+        try:
+            await update_previous_track_ids(session)
+        except Exception as e:
+            print(f"Error during on_ready: {e}")
 
-        # Check for new tracks every 1s
-        await asyncio.sleep(1)
+        while not client.is_closed():
+            tasks = []
+            for user, user_id in SOUNDCLOUD_USERS.items():
+                tasks.append(fetch_track_with_stream_url(session, user_id))
+            tracks_data_list = await asyncio.gather(*tasks)
+
+            for user, tracks_data in zip(SOUNDCLOUD_USERS.keys(), tracks_data_list):
+                if tracks_data:
+                    latest_track_id = None
+                    for track in tracks_data['collection']:
+                        track_id = track['id']
+                        if latest_track_id is None or track_id > latest_track_id:
+                            latest_track_id = track_id
+                        if previous_track_ids[user] is None:
+                            previous_track_ids[user] = latest_track_id
+                        elif track_id > previous_track_ids[user]:
+                            await notify_channel(user, track)
+                            previous_track_ids[user] = track_id
+
+            await asyncio.sleep(1)
 
 @client.event
 async def on_ready():
+    target_channel = discord.utils.get(client.get_all_channels(), name='notifications')
+    if target_channel:
+        await target_channel.send("bot is up!")
     print(f"We have logged in as {client.user}")
+
     # Start the background task to check for new tracks
     client.loop.create_task(check_new_tracks())
 
