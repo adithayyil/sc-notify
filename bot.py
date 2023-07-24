@@ -51,12 +51,15 @@ async def fetch_track_with_stream_url(session, user_id):
     async with session.get(url, params=tracks_params, headers=headers) as response:
         if response.status == 200:
             try:
-                tracks_data = await response.json()
+                tracks_data = await response.text()
+                tracks_data = json.loads(tracks_data)  
                 if all('media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1 for track in tracks_data['collection']):
                     return tracks_data
             except json.JSONDecodeError as e:
                 print(f"JSON decoding error: {e}")
                 return None
+    return None
+
 
 def authorize_stream_url(stream_url_unauthorized, track_authID):
     track_params = {
@@ -153,7 +156,6 @@ async def check_user_tracks(session, user, user_id):
             elif track_id > previous_track_ids[user]:
                 await notify_channel(user, track)
                 previous_track_ids[user] = track_id
-
 
 async def check_new_tracks():
     await client.wait_until_ready()
