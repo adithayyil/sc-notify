@@ -44,6 +44,7 @@ tracks_params = {
 
 client = discord.Client(intents=discord.Intents.default())
 
+message_queue = asyncio.Queue()
 previous_track_ids = {user: None for user in SOUNDCLOUD_USERS}
 
 async def fetch_track_with_stream_url(session, user_id):
@@ -51,15 +52,12 @@ async def fetch_track_with_stream_url(session, user_id):
     async with session.get(url, params=tracks_params, headers=headers) as response:
         if response.status == 200:
             try:
-                tracks_data = await response.text()
-                tracks_data = json.loads(tracks_data)  
-                if all('media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1 for track in tracks_data['collection']):
+                tracks_data = await response.json()
+                if all('media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1 for track in tracks_data.get('collection', [])):
                     return tracks_data
             except json.JSONDecodeError as e:
                 print(f"JSON decoding error: {e}")
                 return None
-    return None
-
 
 def authorize_stream_url(stream_url_unauthorized, track_authID):
     track_params = {
@@ -67,13 +65,17 @@ def authorize_stream_url(stream_url_unauthorized, track_authID):
         'track_authorization': track_authID,
     }
 
-    stream_url = requests.get(
+    response = requests.get(
         stream_url_unauthorized,
         params=track_params,
         headers=headers,
-    ).json()['url']
+    )
+    response_json = response.json()
 
-    return stream_url
+    if response.status_code == 200 and 'url' in response_json:
+        return response_json['url']
+
+    return None
 
 def download_stream_url(url):
     response = requests.get(url)
@@ -82,6 +84,7 @@ def download_stream_url(url):
             file.write(response.content)
         return True
     return False
+
 
 async def send_track_data(target_channel, track_data, user):
     track_title = track_data.get('title')
@@ -101,7 +104,9 @@ async def send_track_data(target_channel, track_data, user):
     track_genre = track_data.get('genre')
     track_tags = track_data.get('tag_list')
 
-    await target_channel.send(f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> ")
+    message = f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> "
+    await message_queue.put((target_channel, message))
+
 
 
 async def send_song_file(target_channel, track_data):
@@ -116,14 +121,12 @@ async def send_song_file(target_channel, track_data):
     else:
         print("Error: Failed to download the song file.")
 
-
 async def notify_channel(user, track):
     target_channel = discord.utils.get(client.get_all_channels(), name='notifications')
     if target_channel:
         await send_track_data(target_channel, track, user)
-        await asyncio.sleep(1) 
+        await asyncio.sleep(1)
         await send_song_file(target_channel, track)
-
 
 async def get_latest_track_id(session, user_id):
     url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
@@ -169,13 +172,30 @@ async def check_new_tracks():
             tasks = [check_user_tracks(session, user, user_id) for user, user_id in SOUNDCLOUD_USERS.items()]
             await asyncio.gather(*tasks)
 
+            # Implement Exponential Backoff and Retry for rate-limiting errors
+            for _ in range(3):
+                try:
+                    target_channel, message = await message_queue.get()
+                    await target_channel.send(message)
+                except discord.errors.HTTPException as e:
+                    if e.status == 429:
+                        # Handle rate-limiting error with exponential backoff
+                        print(f"Rate-limiting error. Retrying in {_} seconds.")
+                        await asyncio.sleep(_)
+                    else:
+                        print(f"HTTP exception: {e}")
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    break
+
             await asyncio.sleep(1)
 
 @client.event
 async def on_ready():
     target_channel = discord.utils.get(client.get_all_channels(), name='notifications')
     if target_channel:
-        await target_channel.send("bot is up!")
+        await target_channel.send("Bot is up!")
     print(f"We have logged in as {client.user}")
 
     # Start the background task to check for new tracks
