@@ -13,4 +13,6 @@
 - [ ] Send notification when previous track amount = 0
 - [x] Find out if there is a way to upload music stream to discord
 - [ ] Add client based custom artist lists to check (with commands) [**IMPORTANT**]
+  - Seperate and store each user lists of specific servers using server IDs
+  - Make use of SQLite3 somehow to store and organize data
 - [ ] Fix tag_list retrieving as NULL
