@@ -7,17 +7,16 @@ import os
 from datetime import datetime
 import aiohttp
 
-
-
+# Loads environment variables
 load_dotenv()
 
+# Gets Discord token and SoundCloud client ID from env
 DISCORD_TOKEN = f"{os.getenv('DISCORD_TOKEN')}"
 SOUNDCLOUD_CLIENT_ID = f"{os.getenv('SOUNDCLOUD_CLIENT_ID')}"
-
-
 with open('users.json', 'r') as file:
     SOUNDCLOUD_USERS = json.load(file)
 
+# Headers and params 
 headers = {
     'Pragma': 'no-cache',
     'Accept': 'application/json, text/javascript, */*; q=0.01',
@@ -33,7 +32,6 @@ headers = {
     'Host': 'api-v2.soundcloud.com',
     'Sec-Fetch-Dest': 'empty',
 }
-
 tracks_params = {
     'representation': '',
     'client_id': SOUNDCLOUD_CLIENT_ID,
@@ -42,11 +40,14 @@ tracks_params = {
     'app_locale': 'en',
 }
 
+# Initializes Discord Bot
 client = discord.Client(intents=discord.Intents.default())
 
+# Message queing for handling discord rate limits
 message_queue = asyncio.Queue()
 previous_track_ids = {user: None for user in SOUNDCLOUD_USERS}
 
+# Fetches stream url from a user_id
 async def fetch_track_with_stream_url(session, user_id):
     url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
     async with session.get(url, params=tracks_params, headers=headers) as response:
@@ -59,6 +60,7 @@ async def fetch_track_with_stream_url(session, user_id):
                 print(f"JSON decoding error: {e}")
                 return None
 
+# Authorizes a stream_url with a track_authID
 def authorize_stream_url(stream_url_unauthorized, track_authID):
     track_params = {
         'client_id': SOUNDCLOUD_CLIENT_ID,
@@ -77,6 +79,7 @@ def authorize_stream_url(stream_url_unauthorized, track_authID):
 
     return None
 
+# Temporarily downloads song with authorized stream_url (server side)
 def download_stream_url(url):
     response = requests.get(url)
     if response.status_code == 200:
@@ -85,7 +88,7 @@ def download_stream_url(url):
         return True
     return False
 
-
+# Sets and queues track metadata to channel
 async def send_track_data(target_channel, track_data, user):
     track_title = track_data.get('title')
     track_url = track_data.get('permalink_url')
@@ -107,8 +110,7 @@ async def send_track_data(target_channel, track_data, user):
     message = f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> "
     await message_queue.put((target_channel, message))
 
-
-
+# Queues authorized stream_url and downloaded song file to channel
 async def send_song_file(target_channel, track_data):
     track_authID = track_data.get('track_authorization')
     stream_url_unauthorized = track_data['media']['transcodings'][1]['url']
@@ -121,6 +123,7 @@ async def send_song_file(target_channel, track_data):
     else:
         print("Error: Failed to download the song file.")
 
+# Sends metadata and song to channel
 async def notify_channel(user, track):
     target_channel = discord.utils.get(client.get_all_channels(), name='notifications')
     if target_channel:
@@ -128,6 +131,7 @@ async def notify_channel(user, track):
         await asyncio.sleep(1)
         await send_song_file(target_channel, track)
 
+# Gets track_id of the newest song that is uploaded
 async def get_latest_track_id(session, user_id):
     url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
     async with session.get(url, params=tracks_params, headers=headers) as response:
@@ -138,6 +142,7 @@ async def get_latest_track_id(session, user_id):
                 return latest_track_id
     return None
 
+# Updates previous track_ids after checking
 async def update_previous_track_ids(session):
     for user, user_id in SOUNDCLOUD_USERS.items():
         latest_track_id = await get_latest_track_id(session, user_id)
@@ -146,6 +151,7 @@ async def update_previous_track_ids(session):
         else:
             previous_track_ids[user] = None
 
+# Checks if a user has new tracks
 async def check_user_tracks(session, user, user_id):
     tracks_data = await fetch_track_with_stream_url(session, user_id)
     if tracks_data:
@@ -160,7 +166,8 @@ async def check_user_tracks(session, user, user_id):
                 await notify_channel(user, track)
                 previous_track_ids[user] = track_id
 
-async def check_new_tracks():
+# Main function
+async def scn():
     await client.wait_until_ready()
     async with aiohttp.ClientSession() as session:
         try:
@@ -199,6 +206,6 @@ async def on_ready():
     print(f"We have logged in as {client.user}")
 
     # Start the background task to check for new tracks
-    client.loop.create_task(check_new_tracks())
+    client.loop.create_task(scn())
 
 client.run(DISCORD_TOKEN)
