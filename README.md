@@ -18,6 +18,6 @@
 - [x] Add client based custom artist lists to check (with commands) [**IMPORTANT**]
   - Seperate and store each user lists of specific servers using server IDs
   - Make use of SQLite3 somehow to store and organize data
-- [ ] URL/Artist UserID as input instead of user ID, then convert to user ID and store in DB
-- [ ] Better handling for commands and change to shorter commands (length)
-- [ ] Fix tag_list retrieving as NULL
+- [x] URL/Artist UserID as input instead of user ID, then convert to user ID and store in DB
+- [x] Better handling for commands and change to shorter commands (length)
+- [ ] Fix art_url retrieving as NULL -- add handling and await when art is processing
