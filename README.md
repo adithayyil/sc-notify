@@ -2,9 +2,17 @@
 
 ## Features
 
-- Checks for newly added tracks for artists in SoundCloud
-- Sends metadata for those newly uploaded tracks like title, date, duration, description, etc...
-- Sends artist uploaded song file!
+- Monitors SoundCloud artists and notifies users of new track uploads
+- Utilizes Discord's API to send notifications to specific channels
+- Fetches and displays metadata about the newly uploaded tracks
+- Authorizes stream URL and auto uploads newly uploaded tracks
+- Allows users to add and remove custom artists to monitor
+- Supports listing all artists being checked for new tracks
+- Provides a user-friendly help command for command explanations
+- Uses asynchronous programming for efficient bot operations
+- Uses SQLite database for storing custom artist data per server
+- Background task to regularly check for new tracks
+- Handles rate-limiting and exceptions for reliable performance
 
 ## Example
 
@@ -21,3 +29,4 @@
 - [x] URL/Artist UserID as input instead of user ID, then convert to user ID and store in DB
 - [x] Better handling for commands and change to shorter commands (length)
 - [ ] Fix art_url retrieving as NULL -- add handling and await when art is processing
+- [ ] Utilize slash commands
