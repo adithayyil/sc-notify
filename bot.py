@@ -1,3 +1,4 @@
+from bs4 import BeautifulSoup
 import discord
 import requests
 import asyncio
@@ -42,7 +43,7 @@ tracks_params = {
 }
 
 # Initializes Discord Bot
-client = commands.Bot(command_prefix='!')
+client = commands.Bot(command_prefix='!', help_command=None)
 
 # Message queing for handling discord rate limits
 message_queue = asyncio.Queue()
@@ -51,12 +52,12 @@ previous_track_ids = {} # For checking previous track_ids
 # Create or connect to the SQLite database for custom artist lists
 conn = sqlite3.connect('artists.db')
 c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS artists (guild_id INTEGER, user_id INTEGER, latest_track_id INTEGER)''')
+c.execute('''CREATE TABLE IF NOT EXISTS artists (guild_id INTEGER, artist_id INTEGER, latest_track_id INTEGER, artist_name TEXT)''')
 conn.commit()
 
-# Fetches stream url from a user_id
-async def fetch_track_with_stream_url(session, user_id):
-    url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
+# Fetches stream url from a artist_id
+async def fetch_track_with_stream_url(session, artist_id):
+    url = f'https://api-v2.soundcloud.com/users/{artist_id}/tracks'
     async with session.get(url, params=tracks_params, headers=headers) as response:
         if response.status == 200:
             try:
@@ -96,7 +97,7 @@ def download_stream_url(url):
     return False
 
 # Sets and queues track metadata to server channel
-async def send_track_data(guild_id, track_data, user):
+async def send_track_data(guild_id, track_data):
     target_channel = None
     guild = discord.utils.get(client.guilds, id=guild_id)
     if guild:
@@ -109,6 +110,7 @@ async def send_track_data(guild_id, track_data, user):
             print("Error: Invalid track data. Missing title or URL.")
             return
 
+        track_artist_username = track_data['user']['permalink']
         track_art_url = track_data.get('artwork_url')
         track_ogart_url = track_art_url.replace("large", "original") if track_art_url and "large" in track_art_url else track_art_url
         track_createdAt_unformatted = track_data.get('created_at')
@@ -120,7 +122,7 @@ async def send_track_data(guild_id, track_data, user):
         track_genre = track_data.get('genre')
         track_tags = track_data.get('tag_list')
 
-        message = f"New Upload from **{user}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> "
+        message = f"New Upload from **{track_artist_username}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> "
 
         try:
             await target_channel.send(message)
@@ -159,13 +161,13 @@ async def send_song_file(guild_id, track_data):
                     print("Error: Failed to download the song file.")
 
 # Sends metadata and song to channel
-async def notify_channel(guild_id, user_id, track):
+async def notify_channel(guild_id, track):
     target_channel = None
     guild = discord.utils.get(client.guilds, id=guild_id)
     if guild:
         target_channel = discord.utils.get(guild.channels, name='notifications')
     if target_channel:
-        await send_track_data(guild_id, track, user_id)
+        await send_track_data(guild_id, track)
         await asyncio.sleep(1)
 
         # Check if the track has a valid stream URL before sending the song file
@@ -173,8 +175,8 @@ async def notify_channel(guild_id, user_id, track):
             await send_song_file(guild_id, track)
 
 # Gets track_id of the newest song that is uploaded
-def get_latest_track_id(user_id):
-    url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
+def get_latest_track_id(artist_id):
+    url = f'https://api-v2.soundcloud.com/users/{artist_id}/tracks'
     response = requests.get(url, params=tracks_params, headers=headers)
     if response.status_code == 200:
         tracks_data = response.json()
@@ -186,37 +188,37 @@ def get_latest_track_id(user_id):
 async def update_previous_track_ids(session):
     for guild in client.guilds:
         guild_id = guild.id
-        c.execute('SELECT user_id, latest_track_id FROM artists WHERE guild_id = ?', (guild_id,))
+        c.execute('SELECT artist_id, latest_track_id FROM artists WHERE guild_id = ?', (guild_id,))
         entries = c.fetchall()
 
-        for user_id, latest_track_id in entries:
-            tracks_data = await fetch_track_with_stream_url(session, user_id)
+        for artist_id, latest_track_id in entries:
+            tracks_data = await fetch_track_with_stream_url(session, artist_id)
             if tracks_data:
                 latest_track = tracks_data['collection'][0]
                 latest_track_id_api = latest_track.get('id')
                 if latest_track_id_api > latest_track_id:
-                    await notify_channel(user_id, latest_track)
-                    c.execute('UPDATE artists SET latest_track_id = ? WHERE guild_id = ? AND user_id = ?', (latest_track_id_api, guild_id, user_id))
+                    await notify_channel(artist_id, latest_track)
+                    c.execute('UPDATE artists SET latest_track_id = ? WHERE guild_id = ? AND artist_id = ?', (latest_track_id_api, guild_id, artist_id))
 
         conn.commit()
 
 # Checks if a user has new tracks
-async def check_user_tracks(session, guild_id, user_id):
-    tracks_data = await fetch_track_with_stream_url(session, user_id)
+async def check_artist_tracks(session, guild_id, artist_id):
+    tracks_data = await fetch_track_with_stream_url(session, artist_id)
     if tracks_data:
-        latest_track_id = previous_track_ids.get((guild_id, user_id))
+        latest_track_id = previous_track_ids.get((guild_id, artist_id))
         if not latest_track_id:
             # If no previous track ID found, store the latest track ID
             latest_track_id = max(track['id'] for track in tracks_data['collection'])
-            previous_track_ids[(guild_id, user_id)] = latest_track_id
+            previous_track_ids[(guild_id, artist_id)] = latest_track_id
 
         for track in tracks_data['collection']:
             track_id = track['id']
             if track_id > latest_track_id:
-                await notify_channel(guild_id, user_id, track)
+                await notify_channel(guild_id, track)
                 latest_track_id = track_id
 
-        previous_track_ids[(guild_id, user_id)] = latest_track_id
+        previous_track_ids[(guild_id, artist_id)] = latest_track_id
 
 # Creates a connection to database file (server side)
 def create_db_connection():
@@ -225,75 +227,139 @@ def create_db_connection():
 
 # Gets custom artists for a guild from the database
 async def get_artists_from_db(guild_id):
-    c.execute('SELECT user_id FROM artists WHERE guild_id = ?', (guild_id,))
+    c.execute('SELECT artist_id FROM artists WHERE guild_id = ?', (guild_id,))
     return [row[0] for row in c.fetchall()]
 
+# Parses script tag content to get id
+def get_artist_id(resp):
+    html_content = resp.content
+    soup = BeautifulSoup(html_content, 'html.parser')
+    script_tags = soup.find_all('script')
+
+    # Extract the script content containing the window.__sc_hydration data
+    script_content = None
+    for script_tag in script_tags:
+        if script_tag.string and 'window.__sc_hydration' in script_tag.string:
+            script_content = script_tag.string 
+            break
+
+    # Parses the string to get id
+    start_index = script_content.find('[')
+    end_index = script_content.rfind(']') + 1
+    json_like_content = script_content[start_index:end_index]
+    data = json.loads(json_like_content)
+
+    for item in data:
+        if 'id' in item['data']:
+            id = item['data']['id']
+            return id
+
 # Adds a custom artist to the guild's list
-@client.command()
-async def add_artist(ctx, user_id: int):
+@client.command(aliases=['aa'])
+async def add_artist(ctx, artist):
     guild_id = ctx.guild.id
     conn = create_db_connection()
     c = conn.cursor()
 
-    # Check if the user_id is valid
-    url = f'https://api-v2.soundcloud.com/users/{user_id}/tracks'
-    response = requests.get(url, params=tracks_params, headers=headers)
-    tracks_data = response.json()
+    # Check if the artist is valid
+    url = f'https://soundcloud.com/{artist}'
+    resp = requests.get(url)
 
-    if 'collection' not in tracks_data or not tracks_data['collection']:
-        await ctx.send(f"Invalid user ID ***{user_id}***. The user doesn't exist on SoundCloud")
+    if resp.status_code == 404:
+        await ctx.send(f"Invalid artist ***{artist}***. The artist doesn't exist on SoundCloud.")
         return
+    
+    artist_id = get_artist_id(resp)
+    artist_name = artist
 
-    c.execute('SELECT user_id FROM artists WHERE guild_id = ? AND user_id = ?', (guild_id, user_id))
+    c.execute('SELECT artist_id FROM artists WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id))
     existing_entry = c.fetchone()
 
     if existing_entry is None:
         # Fetch the latest track ID from SoundCloud API for this artist
-        latest_track_id = get_latest_track_id(user_id)
+        latest_track_id = get_latest_track_id(artist_id)
         if latest_track_id is None:
-            await ctx.send(f"Failed to fetch the latest track ID for user ***{user_id}***.")
+            await ctx.send(f"Failed to fetch the latest track ID for ***{artist_id}***.")
             return
 
-        # Convert guild_id and user_id to int
+        # Convert guild_id and artist_id to int
         guild_id = int(guild_id)
-        user_id = int(user_id)
+        artist_id = int(artist_id)
         # Convert latest_track_id to int if it is not None
         latest_track_id = int(latest_track_id) if latest_track_id else None
 
-        c.execute('INSERT INTO artists (guild_id, user_id, latest_track_id) VALUES (?, ?, ?)', (guild_id, user_id, latest_track_id))
+        c.execute('INSERT INTO artists (guild_id, artist_id, latest_track_id, artist_name) VALUES (?, ?, ?, ?)', (guild_id, artist_id, latest_track_id, artist_name))
         conn.commit()
-        await ctx.send(f"Added user ***{user_id}*** to the list of custom artists for this server.")
+        await ctx.send(f"Added ***{artist_name}*** to the list of custom artists for this server.")
     else:
-        await ctx.send(f"User ***{user_id}*** is already in the list of custom artists for this server.")
+        await ctx.send(f"***{artist_name}*** is already in the list of custom artists for this server.")
 
     conn.close()
 
 # Removes a custom artist from the guild's list
-@client.command()
-async def remove_artist(ctx, user_id: int):
+@client.command(aliases=['ra'])
+async def remove_artist(ctx, artist: str):
     guild_id = ctx.guild.id
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute('DELETE FROM artists WHERE guild_id = ? AND user_id = ?', (guild_id, user_id))
-    conn.commit()
-    conn.close()  # Close the connection after committing changes
-    await ctx.send(f"Removed user ***{user_id}*** from the list of custom artists for this server.")
 
-# Lits all user_ids being checked for new tracks
-@client.command()
+    # Get artist ID based on the artist's name
+    c.execute('SELECT artist_id FROM artists WHERE guild_id = ? AND artist_name = ?', (guild_id, artist))
+    artist_id = c.fetchone()
+
+    if artist_id:
+        c.execute('DELETE FROM artists WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id[0]))
+        conn.commit()
+        conn.close()
+        await ctx.send(f"Removed ***{artist}*** from the list of custom artists for this server.")
+    else:
+        await ctx.send(f"***{artist}*** is not found in the list of custom artists for this server.")
+
+# Lits all artist_ids being checked for new tracks
+@client.command(aliases=['la'])
 async def list_artists(ctx):
     guild_id = ctx.guild.id
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute('SELECT user_id FROM artists WHERE guild_id = ?', (guild_id,))
-    user_ids = [row[0] for row in c.fetchall()]
+    c.execute('SELECT artist_name FROM artists WHERE guild_id = ?', (guild_id,))
+    artist_names = [row[0] for row in c.fetchall()]
     conn.close()  # Close the connection after fetching data
 
-    if len(user_ids) == 0:
+    if len(artist_names) == 0:
         await ctx.send("There are no custom artists added for this server.")
     else:
-        users = "\n".join(str(user_id) for user_id in user_ids)
-        await ctx.send(f"List of custom artist user IDs being checked:\n```\n{users}\n```")
+        artists = "\n".join(artist_name for artist_name in artist_names)
+        await ctx.send(f"List of custom artists being checked:\n```\n{artists}\n```")
+
+# Help command which lists all the commands and it's capabilities
+@client.command()
+async def help(ctx):
+    prefix = "!"
+    help_embed = discord.Embed(
+        title="SoundCloud Notify Bot Help",
+        description="Here's a list of available commands:",
+        color=discord.Color.blue()
+    )
+
+    commands_info = [
+        (f"{prefix}aa [artist]", "Add a custom artist to the list for this server."),
+        (f"{prefix}ra [artist]", "Remove a custom artist from the list for this server."),
+        (f"{prefix}la", "List all artists being checked for new tracks.")
+    ]
+
+    for command, description in commands_info:
+        help_embed.add_field(
+            name=f"**{command}**",
+            value=f"{description}\n",
+            inline=False
+        )
+
+    help_embed.set_footer(text="Replace [artist] with appropriate artist username.")
+
+    # Set a thumbnail for the bot's profile picture
+    help_embed.set_thumbnail(url=client.user.avatar_url)
+
+    await ctx.send(embed=help_embed)
 
 # Main function to check for new tracks and notify channels
 async def check_for_new_tracks():
@@ -303,11 +369,11 @@ async def check_for_new_tracks():
             try:
                 for guild in client.guilds:
                     guild_id = guild.id
-                    c.execute('SELECT user_id FROM artists WHERE guild_id = ?', (guild_id,))
-                    user_ids = [row[0] for row in c.fetchall()]
+                    c.execute('SELECT artist_id FROM artists WHERE guild_id = ?', (guild_id,))
+                    artist_ids = [row[0] for row in c.fetchall()]
 
-                    for user_id in user_ids:
-                        await check_user_tracks(session, guild_id, user_id)
+                    for artist_id in artist_ids:
+                        await check_artist_tracks(session, guild_id, artist_id)
             except Exception as e:
                 print(f"Error during track checking: {e}")
 
@@ -320,19 +386,18 @@ async def on_ready():
     # Fetch and store the latest track ID for each artist in the database
     for guild in client.guilds:
         guild_id = guild.id
-        c.execute('SELECT user_id FROM artists WHERE guild_id = ?', (guild_id,))
-        user_ids = [row[0] for row in c.fetchall()]
+        c.execute('SELECT artist_id FROM artists WHERE guild_id = ?', (guild_id,))
+        artist_ids = [row[0] for row in c.fetchall()]
 
-        for user_id in user_ids:
-            latest_track_id = get_latest_track_id(user_id)
+        for artist_id in artist_ids:
+            latest_track_id = get_latest_track_id(artist_id)
             if latest_track_id is not None:
-                c.execute('UPDATE artists SET latest_track_id = ? WHERE guild_id = ? AND user_id = ?', (latest_track_id, guild_id, user_id))
+                c.execute('UPDATE artists SET latest_track_id = ? WHERE guild_id = ? AND artist_id = ?', (latest_track_id, guild_id, artist_id))
                 conn.commit()
 
     # Start the background task to check for new tracks
     client.loop.create_task(check_for_new_tracks())
 
-    # Print database status
     print("Database Connection Status:", conn is not None)
 
 
@@ -341,7 +406,7 @@ async def on_guild_join(guild):
     print(f"Joined new guild: {guild.name}")
 
     # Add a placeholder entry (user ID 0) to the artists table for the new guild
-    c.execute('INSERT OR IGNORE INTO artists (guild_id, user_id) VALUES (?, ?)', (guild.id, 0))
+    c.execute('INSERT OR IGNORE INTO artists (guild_id, artist_id) VALUES (?, ?)', (guild.id, 0))
     await conn.commit()
 
 client.run(DISCORD_TOKEN)
