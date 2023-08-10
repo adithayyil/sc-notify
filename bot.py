@@ -213,13 +213,12 @@ async def update_previous_track_ids(session):
         conn.commit()
 
 # Checks if a user has new tracks
-async def check_artist_tracks(session, guild_id, artist_id):
+async def check_artist_tracks(session, conn, guild_id, artist_id):
     tracks_data = await fetch_track_with_stream_url(session, artist_id)
-    if tracks_data:
+    if tracks_data and 'collection' in tracks_data:
         latest_track_id = previous_track_ids.get((guild_id, artist_id))
         if not latest_track_id:
-            # If no previous track ID found, store the latest track ID
-            latest_track_id = max(track['id'] for track in tracks_data['collection'])
+            latest_track_id = max(track['id'] for track in tracks_data['collection']) if tracks_data['collection'] else None
             previous_track_ids[(guild_id, artist_id)] = latest_track_id
 
         for track in tracks_data['collection']:
@@ -371,7 +370,7 @@ async def help(interaction: discord.Interaction):
     await interaction.response.send_message(embed=help_embed)
 
 # Main function to check for new tracks and notify channels
-async def check_for_new_tracks():
+async def check_for_new_tracks(conn):
     await client.wait_until_ready()
     async with aiohttp.ClientSession() as session:
         while not client.is_closed():
@@ -382,7 +381,7 @@ async def check_for_new_tracks():
                     artist_ids = [row[0] for row in c.fetchall()]
 
                     for artist_id in artist_ids:
-                        await check_artist_tracks(session, guild_id, artist_id)
+                        await check_artist_tracks(session, conn, guild_id, artist_id)  # Pass the connection to check_artist_tracks
             except Exception as e:
                 print(f"Error during track checking: {e}")
 
@@ -391,6 +390,9 @@ async def check_for_new_tracks():
 @client.event
 async def on_ready():
     print(f"\nWe have logged in as {client.user}")
+
+    # Create or connect to the SQLite database
+    conn = create_db_connection()
 
     # Fetch and store the latest track ID for each artist in the database
     for guild in client.guilds:
@@ -412,17 +414,12 @@ async def on_ready():
         print(e)
         
     # Start the background task to check for new tracks
-    client.loop.create_task(check_for_new_tracks())
+    client.loop.create_task(check_for_new_tracks(conn))  # Pass the connection to the background task
 
     print("Database Connection Status:", conn is not None)
 
-
 @client.event
 async def on_guild_join(guild):
-    print(f"Joined new guild: {guild.name}")
-
-    # Add a placeholder entry (user ID 0) to the artists table for the new guild
-    c.execute('INSERT OR IGNORE INTO artists (guild_id, artist_id) VALUES (?, ?)', (guild.id, 0))
-    await conn.commit()
+    print(f"Joined new guild: {guild.name} ({guild.id})")
 
 client.run(DISCORD_TOKEN)
