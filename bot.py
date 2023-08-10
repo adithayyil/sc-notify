@@ -276,7 +276,7 @@ async def add_artist(interaction: discord.Interaction, artist: str):
     resp = requests.get(url)
 
     if resp.status_code == 404:
-        await interaction.send_message(f"Invalid artist ***{artist}***. The artist doesn't exist on SoundCloud.")
+        await interaction.response.send_message(f"Invalid artist ***{artist}***. The artist doesn't exist on SoundCloud.")
         return
     
     artist_id = get_artist_id(resp)
