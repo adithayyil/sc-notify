@@ -308,7 +308,7 @@ async def add_artist(interaction: discord.Interaction, artist: str):
 
 # Removes a custom artist from the guild's list
 @client.tree.command(name='remove', description='Remove a custom artist from the list for this server')
-@app_commands.describe(artist = 'Artist username that you would like to remove from the custom list for this server')
+@app_commands.describe(artist='Artist username that you would like to remove from the custom list for this server')
 async def remove_artist(interaction: discord.Interaction, artist: str):
     guild_id = interaction.guild.id
     conn = create_db_connection()
@@ -324,7 +324,7 @@ async def remove_artist(interaction: discord.Interaction, artist: str):
         conn.close()
         await interaction.response.send_message(f"Removed ***{artist}*** from the list of custom artists for this server.")
     else:
-        await interaction.response.send_message.send(f"***{artist}*** is not found in the list of custom artists for this server.")
+        await interaction.response.send_message(f"***{artist}*** is not found in the list of custom artists for this server.")
 
 # Lits all artist_ids being checked for new tracks
 @client.tree.command(name='list', description='Get a list of artists currently being checked for new tracks')
