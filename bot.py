@@ -9,6 +9,7 @@ from datetime import datetime
 import aiohttp
 import sqlite3
 from discord.ext import commands
+from discord import app_commands
 
 # Loads environment variables
 load_dotenv()
@@ -43,7 +44,16 @@ tracks_params = {
 }
 
 # Initializes Discord Bot
-client = commands.Bot(command_prefix='!', help_command=None)
+intents = discord.Intents.default()
+intents.typing = False 
+client = commands.Bot(command_prefix='!', help_command=None, intents=intents)
+
+# Create the command group "tree"
+@client.group(name="tree")
+async def tree(ctx):
+    if ctx.invoked_subcommand is None:
+        await ctx.send('Invalid tree command. Available subcommands: add, remove, list')
+
 
 # Message queing for handling discord rate limits
 message_queue = asyncio.Queue()
@@ -255,9 +265,10 @@ def get_artist_id(resp):
             return id
 
 # Adds a custom artist to the guild's list
-@client.command(aliases=['aa'])
-async def add_artist(ctx, artist):
-    guild_id = ctx.guild.id
+@client.tree.command(name='add', description='Add a custom artist to the list for this server')
+@app_commands.describe(artist = 'Artist username that you would like to add to the custom list for this server')
+async def add_artist(interaction: discord.Interaction, artist: str):
+    guild_id = interaction.guild.id
     conn = create_db_connection()
     c = conn.cursor()
 
@@ -266,7 +277,7 @@ async def add_artist(ctx, artist):
     resp = requests.get(url)
 
     if resp.status_code == 404:
-        await ctx.send(f"Invalid artist ***{artist}***. The artist doesn't exist on SoundCloud.")
+        await interaction.send_message(f"Invalid artist ***{artist}***. The artist doesn't exist on SoundCloud.")
         return
     
     artist_id = get_artist_id(resp)
@@ -279,7 +290,7 @@ async def add_artist(ctx, artist):
         # Fetch the latest track ID from SoundCloud API for this artist
         latest_track_id = get_latest_track_id(artist_id)
         if latest_track_id is None:
-            await ctx.send(f"Failed to fetch the latest track ID for ***{artist_id}***.")
+            await interaction.response.send_message(f"Failed to fetch the latest track ID for ***{artist_id}***.")
             return
 
         # Convert guild_id and artist_id to int
@@ -290,16 +301,17 @@ async def add_artist(ctx, artist):
 
         c.execute('INSERT INTO artists (guild_id, artist_id, latest_track_id, artist_name) VALUES (?, ?, ?, ?)', (guild_id, artist_id, latest_track_id, artist_name))
         conn.commit()
-        await ctx.send(f"Added ***{artist_name}*** to the list of custom artists for this server.")
+        await interaction.response.send_message(content=f"Added ***{artist_name}*** to the list of custom artists for this server.")
     else:
-        await ctx.send(f"***{artist_name}*** is already in the list of custom artists for this server.")
+        await interaction.response.send_message(content=f"***{artist_name}*** is already in the list of custom artists for this server.")
 
     conn.close()
 
 # Removes a custom artist from the guild's list
-@client.command(aliases=['ra'])
-async def remove_artist(ctx, artist: str):
-    guild_id = ctx.guild.id
+@client.tree.command(name='remove', description='Remove a custom artist from the list for this server')
+@app_commands.describe(artist = 'Artist username that you would like to remove from the custom list for this server')
+async def remove_artist(interaction: discord.Interaction, artist: str):
+    guild_id = interaction.guild.id
     conn = create_db_connection()
     c = conn.cursor()
 
@@ -311,14 +323,14 @@ async def remove_artist(ctx, artist: str):
         c.execute('DELETE FROM artists WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id[0]))
         conn.commit()
         conn.close()
-        await ctx.send(f"Removed ***{artist}*** from the list of custom artists for this server.")
+        await interaction.response.send_message(f"Removed ***{artist}*** from the list of custom artists for this server.")
     else:
-        await ctx.send(f"***{artist}*** is not found in the list of custom artists for this server.")
+        await interaction.response.send_message.send(f"***{artist}*** is not found in the list of custom artists for this server.")
 
 # Lits all artist_ids being checked for new tracks
-@client.command(aliases=['la'])
-async def list_artists(ctx):
-    guild_id = ctx.guild.id
+@client.tree.command(name='list', description='Get a list of artists currently being checked for new tracks')
+async def list_artists(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
     conn = create_db_connection()
     c = conn.cursor()
     c.execute('SELECT artist_name FROM artists WHERE guild_id = ?', (guild_id,))
@@ -326,15 +338,15 @@ async def list_artists(ctx):
     conn.close()  # Close the connection after fetching data
 
     if len(artist_names) == 0:
-        await ctx.send("There are no custom artists added for this server.")
+        await interaction.response.send_message("There are no custom artists added for this server")
     else:
         artists = "\n".join(artist_name for artist_name in artist_names)
-        await ctx.send(f"List of custom artists being checked:\n```\n{artists}\n```")
+        await interaction.response.send_message(f"List of custom artists being checked:\n```\n{artists}\n```")
 
 # Help command which lists all the commands and it's capabilities
-@client.command()
-async def help(ctx):
-    prefix = "!"
+@client.tree.command(name="help", description="Get the list of available commands in SoundCloud Notify")
+async def help(interaction: discord.Interaction):
+    prefix = "/"
     help_embed = discord.Embed(
         title="SoundCloud Notify Bot Help",
         description="Here's a list of available commands:",
@@ -342,9 +354,9 @@ async def help(ctx):
     )
 
     commands_info = [
-        (f"{prefix}aa [artist]", "Add a custom artist to the list for this server."),
-        (f"{prefix}ra [artist]", "Remove a custom artist from the list for this server."),
-        (f"{prefix}la", "List all artists being checked for new tracks.")
+        (f"{prefix}add [artist]", "Add a custom artist to the list for this server"),
+        (f"{prefix}remove [artist]", "Remove a custom artist from the list for this server"),
+        (f"{prefix}list", "List all artists being checked for new tracks")
     ]
 
     for command, description in commands_info:
@@ -354,12 +366,9 @@ async def help(ctx):
             inline=False
         )
 
-    help_embed.set_footer(text="Replace [artist] with appropriate artist username.")
+    help_embed.set_footer(text="[artist] is the appropriate artist username")
 
-    # Set a thumbnail for the bot's profile picture
-    help_embed.set_thumbnail(url=client.user.avatar_url)
-
-    await ctx.send(embed=help_embed)
+    await interaction.response.send_message(embed=help_embed)
 
 # Main function to check for new tracks and notify channels
 async def check_for_new_tracks():
@@ -381,7 +390,7 @@ async def check_for_new_tracks():
 
 @client.event
 async def on_ready():
-    print(f"We have logged in as {client.user}")
+    print(f"\nWe have logged in as {client.user}")
 
     # Fetch and store the latest track ID for each artist in the database
     for guild in client.guilds:
@@ -395,6 +404,13 @@ async def on_ready():
                 c.execute('UPDATE artists SET latest_track_id = ? WHERE guild_id = ? AND artist_id = ?', (latest_track_id, guild_id, artist_id))
                 conn.commit()
 
+    # Syncing slash commands 
+    try:
+        synced = await client.tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+    except Exception as e:
+        print(e)
+        
     # Start the background task to check for new tracks
     client.loop.create_task(check_for_new_tracks())
 
