@@ -36,3 +36,5 @@
 - [ ] Fix art_url retrieving as NULL -- add handling and await when art is processing
 - [x] Utilize slash commands
 - [ ] Add ability to 'link' commands to /help embed
+- [ ] Fix and handle Database locking (important)
+
