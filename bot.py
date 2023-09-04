@@ -242,7 +242,7 @@ async def get_artists_from_db(guild_id):
 # Parses script tag content to get id
 def get_artist_id(resp):
     html_content = resp.content
-    soup = BeautifulSoup(html_content, 'html.parser')a
+    soup = BeautifulSoup(html_content, 'html.parser')
     script_tags = soup.find_all('script')
 
     # Extract the script content containing the window.__sc_hydration data
