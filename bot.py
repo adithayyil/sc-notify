@@ -435,4 +435,14 @@ async def on_ready():
 async def on_guild_join(guild):
     print(f"Joined new guild: {guild.name} ({guild.id})")
 
+    notifications_channel = discord.utils.get(guild.channels, name="notifications", type=discord.ChannelType.text)
+
+    if not notifications_channel:
+        try:
+            new_channel = await guild.create_text_channel("notifications")
+            await new_channel.send("This channel is for notifications.")
+        except:
+            await guild.system_channel.send("I couldn't create a `#notifications` channel. Please create it manually to get notifications.")
+
+
 client.run(DISCORD_TOKEN)
