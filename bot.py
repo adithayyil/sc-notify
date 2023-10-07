@@ -59,11 +59,18 @@ async def tree(ctx):
 message_queue = asyncio.Queue()
 previous_track_ids = {} # For checking previous track_ids
 
-# Create or connect to the SQLite database for custom artist lists
+# Checks for SQLite database for custom artist lists
 conn = sqlite3.connect('artists.db', isolation_level='DEFERRED')
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS artists (guild_id INTEGER, artist_id INTEGER, latest_track_id INTEGER, artist_name TEXT)''')
 conn.commit()
+conn.close()
+
+# Creates a connection to database file (server side)
+def create_db_connection():
+    conn = sqlite3.connect('artists.db')
+    return conn
+
 
 # Fetches stream url from a artist_id
 async def fetch_track_with_stream_url(session, artist_id):
@@ -196,6 +203,9 @@ def get_latest_track_id(artist_id):
 
 # Updates previous track_ids after checking
 async def update_previous_track_ids(session):
+    conn = create_db_connection()
+    c = conn.cursor()
+
     for guild in client.guilds:
         guild_id = guild.id
         c.execute('SELECT artist_id, latest_track_id FROM artists WHERE guild_id = ?', (guild_id,))
@@ -229,13 +239,12 @@ async def check_artist_tracks(session, conn, guild_id, artist_id):
 
         previous_track_ids[(guild_id, artist_id)] = latest_track_id
 
-# Creates a connection to database file (server side)
-def create_db_connection():
-    conn = sqlite3.connect('artists.db')
-    return conn
 
 # Gets custom artists for a guild from the database
 async def get_artists_from_db(guild_id):
+    conn = create_db_connection()
+    c = conn.cursor()
+
     c.execute('SELECT artist_id FROM artists WHERE guild_id = ?', (guild_id,))
     return [row[0] for row in c.fetchall()]
 
@@ -371,6 +380,9 @@ async def help(interaction: discord.Interaction):
 
 # Main function to check for new tracks and notify channels
 async def check_for_new_tracks(conn):
+    conn = create_db_connection()
+    c = conn.cursor()
+
     await client.wait_until_ready()
     async with aiohttp.ClientSession() as session:
         while not client.is_closed():
@@ -393,6 +405,7 @@ async def on_ready():
 
     # Create or connect to the SQLite database
     conn = create_db_connection()
+    c = conn.cursor()
 
     # Fetch and store the latest track ID for each artist in the database
     for guild in client.guilds:
