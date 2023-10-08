@@ -7,7 +7,9 @@ Bot Status: **Online**
 - You can add the bot to your server [here](https://discord.com/api/oauth2/authorize?client_id=1130997040579620935&permissions=274877959184&scope=bot)!
 - And please [report](https://github.com/adithayyil/sc-notify/issues) any bugs, thanks!
 
-
+## Information
+- Currently being hosted on University of Waterloo CSC hfcs server.
+- Previously hosted on a Digital Ocean droplet
 
 ## Features
 
@@ -40,5 +42,5 @@ Bot Status: **Online**
 - [ ] Fix art_url retrieving as NULL -- add handling and await when art is processing
 - [x] Utilize slash commands
 - [ ] Add ability to 'link' commands to /help embed
-- [ ] Fix and handle Database locking (important)
+- [x] Fix and handle Database locking (important)
 
