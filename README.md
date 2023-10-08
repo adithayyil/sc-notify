@@ -9,7 +9,7 @@ Bot Status: **Online**
 
 ## Information
 - Currently being hosted on University of Waterloo CSC hfcs server.
-- Previously hosted on a Digital Ocean droplet
+- Previously hosted on a Digital Ocean and Azure
 
 ## Features
 
