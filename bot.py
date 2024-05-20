@@ -10,6 +10,7 @@ import aiohttp
 import sqlite3
 from discord.ext import commands
 from discord import app_commands
+import base64
 
 # Loads environment variables
 load_dotenv()
@@ -62,7 +63,21 @@ previous_track_ids = {} # For checking previous track_ids
 # Checks for SQLite database for custom artist lists
 conn = sqlite3.connect('artists.db', isolation_level='DEFERRED')
 c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS artists (guild_id INTEGER, artist_id INTEGER, latest_track_id INTEGER, artist_name TEXT)''')
+
+c.execute('''CREATE TABLE IF NOT EXISTS artists (
+    artist_id INTEGER PRIMARY KEY,
+    artist_name TEXT,
+    latest_track_id INTEGER
+)''')
+
+c.execute('''CREATE TABLE IF NOT EXISTS artist_guilds (
+    id INTEGER PRIMARY KEY,
+    artist_id INTEGER,
+    guild_id INTEGER,
+    FOREIGN KEY (artist_id) REFERENCES artists (artist_id),
+    FOREIGN KEY (guild_id) REFERENCES guilds (guild_id)
+)''')
+
 conn.commit()
 conn.close()
 
@@ -113,8 +128,8 @@ def download_stream_url(url):
         return True
     return False
 
-# Sets and queues track metadata to server channel
-async def send_track_data(guild_id, track_data):
+# Sets and queues track metadata and song file to server channel
+async def send_data(guild_id, track_data):
     target_channel = None
     guild = discord.utils.get(client.guilds, id=guild_id)
     if guild:
@@ -126,7 +141,8 @@ async def send_track_data(guild_id, track_data):
         if not track_title or not track_url:
             print("Error: Invalid track data. Missing title or URL.")
             return
-
+        
+        track_artist = track_data['user']['username']
         track_artist_username = track_data['user']['permalink']
         track_art_url = track_data.get('artwork_url')
         track_ogart_url = track_art_url.replace("large", "original") if track_art_url and "large" in track_art_url else track_art_url
@@ -139,41 +155,48 @@ async def send_track_data(guild_id, track_data):
         track_genre = track_data.get('genre')
         track_tags = track_data.get('tag_list')
 
-        message = f"New Upload from **{track_artist_username}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> "
+        message = f"Artist: {track_artist}\nUsername: {track_artist_username}\nUpload Title: {track_title}\nRelease Date & Time: {track_createdAt_formatted}\nDuration: {track_duration_converted}\nTrack ID: {track_id}\nGenre: {track_genre}\nTags: {track_tags}\n"
+        if track_description:
+            message += f"Description:\n{track_description}\n"
+        else:
+            message += "Description: \n"
+        message += f"Artwork URL: {track_ogart_url}\nLink: {track_url} "
 
-        try:
-            await target_channel.send(message)
-        except discord.errors.HTTPException as e:
-            if e.status == 429:
-                # Handle rate-limiting error with exponential backoff
-                print(f"Rate-limiting error during send_track_data. Retrying in 1 second.")
-                await asyncio.sleep(1)
-                await target_channel.send(message)
-            else:
-                print(f"HTTP exception during send_track_data: {e}")
+        encoded_file_name = base64.b64encode(f"{track_artist} - {track_title}".encode("utf-8")).decode("utf-8")
+        with open(f'{encoded_file_name}.txt', 'w') as data_file:
+            data_file.write(message)
 
-# Queues authorized stream_url and downloaded song file to server channel
-async def send_song_file(guild_id, track_data):
-    target_channel = None
-    guild = discord.utils.get(client.guilds, id=guild_id)
-    if guild:
-        target_channel = discord.utils.get(guild.channels, name='notifications')
-    if target_channel:
         track_authID = track_data.get('track_authorization')
         stream_url_unauthorized = track_data['media']['transcodings'][1]['url']
         stream_url = authorize_stream_url(stream_url_unauthorized, track_authID)
-
+        # TODO: CLEAN THIS SHIT UP NEXT TIME LOL
         async with aiohttp.ClientSession() as session:
             async with session.get(stream_url) as response:
                 if response.status == 200:
-                    with open("temp.mp3", "wb") as file:
-                        file.write(await response.read())
+                    with open(f"{encoded_file_name}.mp3", "wb") as song_file:
+                        song_file.write(await response.read())
                     try:
-                        with open("temp.mp3", "rb") as music_file:
-                            await target_channel.send(file=discord.File(music_file, filename=f"{track_data['title']}.mp3"))
-                        os.remove("temp.mp3")  # Remove the file after sending successfully
+                        with open(f"{encoded_file_name}.txt", "rb") as data_file, open(f"{encoded_file_name}.mp3", "rb") as song_file:
+                            song_file_size = os.path.getsize(f"{encoded_file_name}.mp3")
+                            max_file_size = 25 * 1024 * 1024 
+                            if song_file_size > max_file_size:
+                                files = [
+                                    discord.File(data_file, filename=f"{track_artist} - {track_title}.txt")
+                                ]
+                                await target_channel.send(f"New track from **{track_artist}**!\n{track_url}", 
+                                                        files=files)
+                                await target_channel.send(f"The track **{track_title}** by **{track_artist}** is too large to be sent!")
+                            else:
+                                files = [
+                                    discord.File(data_file, filename=f"{track_artist} - {track_title}.txt"),
+                                    discord.File(song_file, filename=f"{track_title}.mp3")
+                                ]
+                                await target_channel.send(f"New track from **{track_artist}**!\n{track_url}", 
+                                                        files=files)
+                        os.remove(f"{encoded_file_name}.txt")
+                        os.remove(f"{encoded_file_name}.mp3")
                     except Exception as e:
-                        print(f"Error during send_song_file: {e}")
+                        print(f"Error during send_data: {e}")
                 else:
                     print("Error: Failed to download the song file.")
 
@@ -184,12 +207,13 @@ async def notify_channel(guild_id, track):
     if guild:
         target_channel = discord.utils.get(guild.channels, name='notifications')
     if target_channel:
-        await send_track_data(guild_id, track)
+        await send_data(guild_id, track)
         await asyncio.sleep(1)
 
+        # --- v0 stuff ---
         # Check if the track has a valid stream URL before sending the song file
-        if 'media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1:
-            await send_song_file(guild_id, track)
+        # if 'media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1:
+        #     await send_song_file(guild_id, track)
 
 # Gets track_id of the newest song that is uploaded
 def get_latest_track_id(artist_id):
@@ -291,29 +315,26 @@ async def add_artist(interaction: discord.Interaction, artist: str):
     artist_id = get_artist_id(resp)
     artist_name = artist
 
-    c.execute('SELECT artist_id FROM artists WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id))
+    c.execute('SELECT artist_id FROM artists WHERE artist_id = ?', (artist_id,))
     existing_entry = c.fetchone()
 
     if existing_entry is None:
         # Fetch the latest track ID from SoundCloud API for this artist
         latest_track_id = get_latest_track_id(artist_id)
         if latest_track_id is None:
-            await interaction.response.send_message(f"Failed to fetch the latest track ID for ***{artist_id}***.")
+            await interaction.response.send_message(f"Failed to fetch the latest track ID for ***{artist_name}***.")
             return
 
-        # Convert guild_id and artist_id to int
-        guild_id = int(guild_id)
-        artist_id = int(artist_id)
         # Convert latest_track_id to int if it is not None
         latest_track_id = int(latest_track_id) if latest_track_id else None
 
-        c.execute('INSERT INTO artists (guild_id, artist_id, latest_track_id, artist_name) VALUES (?, ?, ?, ?)', (guild_id, artist_id, latest_track_id, artist_name))
-        conn.commit()
-        await interaction.response.send_message(content=f"Added ***{artist_name}*** to the list of custom artists for this server.")
-    else:
-        await interaction.response.send_message(content=f"***{artist_name}*** is already in the list of custom artists for this server.")
-
+        c.execute('INSERT INTO artists (artist_id, latest_track_id, artist_name) VALUES (?, ?, ?)', (artist_id, latest_track_id, artist_name))
+    
+    # Insert guild_id into artist_guilds
+    c.execute('INSERT OR IGNORE INTO artist_guilds (artist_id, guild_id) VALUES (?, ?)', (artist_id, guild_id))
+    conn.commit()
     conn.close()
+    await interaction.response.send_message(content=f"Added ***{artist_name}*** to the list of custom artists for this server.")
 
 # Removes a custom artist from the guild's list
 @client.tree.command(name='remove', description='Remove a custom artist from the list for this server')
@@ -324,11 +345,17 @@ async def remove_artist(interaction: discord.Interaction, artist: str):
     c = conn.cursor()
 
     # Get artist ID based on the artist's name
-    c.execute('SELECT artist_id FROM artists WHERE guild_id = ? AND artist_name = ?', (guild_id, artist))
+    c.execute('SELECT artist_id FROM artists WHERE artist_name = ?', (artist,))
     artist_id = c.fetchone()
 
     if artist_id:
-        c.execute('DELETE FROM artists WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id[0]))
+        artist_id = artist_id[0]
+        c.execute('DELETE FROM artist_guilds WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id))
+        # Check if the artist is still mapped to any guilds
+        c.execute('SELECT COUNT(*) FROM artist_guilds WHERE artist_id = ?', (artist_id,))
+        count = c.fetchone()[0]
+        if count == 0:
+            c.execute('DELETE FROM artists WHERE artist_id = ?', (artist_id,))
         conn.commit()
         conn.close()
         await interaction.response.send_message(f"Removed ***{artist}*** from the list of custom artists for this server.")
@@ -341,9 +368,12 @@ async def list_artists(interaction: discord.Interaction):
     guild_id = interaction.guild.id
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute('SELECT artist_name FROM artists WHERE guild_id = ?', (guild_id,))
+    c.execute('''SELECT a.artist_name 
+                 FROM artists a 
+                 JOIN artist_guilds ag ON a.artist_id = ag.artist_id 
+                 WHERE ag.guild_id = ?''', (guild_id,))
     artist_names = [row[0] for row in c.fetchall()]
-    conn.close()  # Close the connection after fetching data
+    conn.close()
 
     if len(artist_names) == 0:
         await interaction.response.send_message("There are no custom artists added for this server")
@@ -387,13 +417,17 @@ async def check_for_new_tracks(conn):
     async with aiohttp.ClientSession() as session:
         while not client.is_closed():
             try:
-                for guild in client.guilds:
-                    guild_id = guild.id
-                    c.execute('SELECT artist_id FROM artists WHERE guild_id = ?', (guild_id,))
+                c.execute('SELECT DISTINCT guild_id FROM artist_guilds')
+                guild_ids = [row[0] for row in c.fetchall()]
+                for guild_id in guild_ids:
+                    c.execute('''SELECT a.artist_id 
+                                 FROM artists a 
+                                 JOIN artist_guilds agm ON a.artist_id = agm.artist_id 
+                                 WHERE agm.guild_id = ?''', (guild_id,))
                     artist_ids = [row[0] for row in c.fetchall()]
 
                     for artist_id in artist_ids:
-                        await check_artist_tracks(session, conn, guild_id, artist_id)  # Pass the connection to check_artist_tracks
+                        await check_artist_tracks(session, conn, guild_id, artist_id)
             except Exception as e:
                 print(f"Error during track checking: {e}")
 
@@ -408,16 +442,14 @@ async def on_ready():
     c = conn.cursor()
 
     # Fetch and store the latest track ID for each artist in the database
-    for guild in client.guilds:
-        guild_id = guild.id
-        c.execute('SELECT artist_id FROM artists WHERE guild_id = ?', (guild_id,))
-        artist_ids = [row[0] for row in c.fetchall()]
+    c.execute('SELECT artist_id FROM artists')
+    artist_ids = [row[0] for row in c.fetchall()]
 
-        for artist_id in artist_ids:
-            latest_track_id = get_latest_track_id(artist_id)
-            if latest_track_id is not None:
-                c.execute('UPDATE artists SET latest_track_id = ? WHERE guild_id = ? AND artist_id = ?', (latest_track_id, guild_id, artist_id))
-                conn.commit()
+    for artist_id in artist_ids:
+        latest_track_id = get_latest_track_id(artist_id)
+        if latest_track_id is not None:
+            c.execute('UPDATE artists SET latest_track_id = ? WHERE artist_id = ?', (latest_track_id, artist_id))
+            conn.commit()
 
     # Syncing slash commands 
     try:
@@ -427,7 +459,7 @@ async def on_ready():
         print(e)
         
     # Start the background task to check for new tracks
-    client.loop.create_task(check_for_new_tracks(conn))  # Pass the connection to the background task
+    client.loop.create_task(check_for_new_tracks(conn))
 
     print("Database Connection Status:", conn is not None)
 
