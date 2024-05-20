@@ -321,12 +321,9 @@ async def add_artist(interaction: discord.Interaction, artist: str):
     if existing_entry is None:
         # Fetch the latest track ID from SoundCloud API for this artist
         latest_track_id = get_latest_track_id(artist_id)
-        if latest_track_id is None:
-            await interaction.response.send_message(f"Failed to fetch the latest track ID for ***{artist_name}***.")
-            return
 
         # Convert latest_track_id to int if it is not None
-        latest_track_id = int(latest_track_id) if latest_track_id else None
+        latest_track_id = int(latest_track_id) if latest_track_id else 0
 
         c.execute('INSERT INTO artists (artist_id, latest_track_id, artist_name) VALUES (?, ?, ?)', (artist_id, latest_track_id, artist_name))
     
