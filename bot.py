@@ -10,6 +10,7 @@ import aiohttp
 import sqlite3
 from discord.ext import commands
 from discord import app_commands
+import base64
 
 # Loads environment variables
 load_dotenv()
@@ -113,8 +114,8 @@ def download_stream_url(url):
         return True
     return False
 
-# Sets and queues track metadata to server channel
-async def send_track_data(guild_id, track_data):
+# Sets and queues track metadata and song file to server channel
+async def send_data(guild_id, track_data):
     target_channel = None
     guild = discord.utils.get(client.guilds, id=guild_id)
     if guild:
@@ -126,7 +127,8 @@ async def send_track_data(guild_id, track_data):
         if not track_title or not track_url:
             print("Error: Invalid track data. Missing title or URL.")
             return
-
+        
+        track_artist = track_data['user']['username']
         track_artist_username = track_data['user']['permalink']
         track_art_url = track_data.get('artwork_url')
         track_ogart_url = track_art_url.replace("large", "original") if track_art_url and "large" in track_art_url else track_art_url
@@ -139,26 +141,17 @@ async def send_track_data(guild_id, track_data):
         track_genre = track_data.get('genre')
         track_tags = track_data.get('tag_list')
 
-        message = f"New Upload from **{track_artist_username}**\n\n**Upload Title:** {track_title}\n**Release Date & Time:** {track_createdAt_formatted}\n**Duration:** {track_duration_converted}\n**Track ID:** {track_id}\n**Genre:** {track_genre}\n**Tags:** {track_tags}\n**Description:** ```{track_description}```\n**Artwork URL:** {track_ogart_url}\n**Link:** <{track_url}> "
+        message = f"Artist: {track_artist}\nUsername: {track_artist_username}\nUpload Title: {track_title}\nRelease Date & Time: {track_createdAt_formatted}\nDuration: {track_duration_converted}\nTrack ID: {track_id}\nGenre: {track_genre}\nTags: {track_tags}\n"
+        if track_description:
+            message += f"Description:\n{track_description}\n"
+        else:
+            message += "Description: \n"
+        message += f"Artwork URL: {track_ogart_url}\nLink: {track_url} "
 
-        try:
-            await target_channel.send(message)
-        except discord.errors.HTTPException as e:
-            if e.status == 429:
-                # Handle rate-limiting error with exponential backoff
-                print(f"Rate-limiting error during send_track_data. Retrying in 1 second.")
-                await asyncio.sleep(1)
-                await target_channel.send(message)
-            else:
-                print(f"HTTP exception during send_track_data: {e}")
+        encoded_file_name = base64.b64encode(f"{track_artist} - {track_title}".encode("utf-8")).decode("utf-8")
+        with open(f'{encoded_file_name}.txt', 'w') as data_file:
+            data_file.write(message)
 
-# Queues authorized stream_url and downloaded song file to server channel
-async def send_song_file(guild_id, track_data):
-    target_channel = None
-    guild = discord.utils.get(client.guilds, id=guild_id)
-    if guild:
-        target_channel = discord.utils.get(guild.channels, name='notifications')
-    if target_channel:
         track_authID = track_data.get('track_authorization')
         stream_url_unauthorized = track_data['media']['transcodings'][1]['url']
         stream_url = authorize_stream_url(stream_url_unauthorized, track_authID)
@@ -166,14 +159,20 @@ async def send_song_file(guild_id, track_data):
         async with aiohttp.ClientSession() as session:
             async with session.get(stream_url) as response:
                 if response.status == 200:
-                    with open("temp.mp3", "wb") as file:
-                        file.write(await response.read())
+                    with open(f"{encoded_file_name}.mp3", "wb") as song_file:
+                        song_file.write(await response.read())
                     try:
-                        with open("temp.mp3", "rb") as music_file:
-                            await target_channel.send(file=discord.File(music_file, filename=f"{track_data['title']}.mp3"))
-                        os.remove("temp.mp3")  # Remove the file after sending successfully
+                        with open(f"{encoded_file_name}.txt", "rb") as data_file, open(f"{encoded_file_name}.mp3", "rb") as song_file:
+                            files = [
+                                discord.File(data_file, filename=f"{track_artist} - {track_title}.txt"),
+                                discord.File(song_file, filename=f"{track_title}.mp3")
+                            ]
+                            await target_channel.send(f"New track from **{track_artist}**!\n{track_url}", 
+                                                      files=files)
+                        os.remove(f"{encoded_file_name}.txt")
+                        os.remove(f"{encoded_file_name}.mp3")
                     except Exception as e:
-                        print(f"Error during send_song_file: {e}")
+                        print(f"Error during send_data: {e}")
                 else:
                     print("Error: Failed to download the song file.")
 
@@ -184,12 +183,13 @@ async def notify_channel(guild_id, track):
     if guild:
         target_channel = discord.utils.get(guild.channels, name='notifications')
     if target_channel:
-        await send_track_data(guild_id, track)
+        await send_data(guild_id, track)
         await asyncio.sleep(1)
 
+        # --- v0 stuff ---
         # Check if the track has a valid stream URL before sending the song file
-        if 'media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1:
-            await send_song_file(guild_id, track)
+        # if 'media' in track and 'transcodings' in track['media'] and len(track['media']['transcodings']) > 1:
+        #     await send_song_file(guild_id, track)
 
 # Gets track_id of the newest song that is uploaded
 def get_latest_track_id(artist_id):
