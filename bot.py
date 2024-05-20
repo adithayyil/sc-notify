@@ -63,7 +63,21 @@ previous_track_ids = {} # For checking previous track_ids
 # Checks for SQLite database for custom artist lists
 conn = sqlite3.connect('artists.db', isolation_level='DEFERRED')
 c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS artists (guild_id INTEGER, artist_id INTEGER, latest_track_id INTEGER, artist_name TEXT)''')
+
+c.execute('''CREATE TABLE IF NOT EXISTS artists (
+    artist_id INTEGER PRIMARY KEY,
+    artist_name TEXT,
+    latest_track_id INTEGER
+)''')
+
+c.execute('''CREATE TABLE IF NOT EXISTS artist_guilds (
+    id INTEGER PRIMARY KEY,
+    artist_id INTEGER,
+    guild_id INTEGER,
+    FOREIGN KEY (artist_id) REFERENCES artists (artist_id),
+    FOREIGN KEY (guild_id) REFERENCES guilds (guild_id)
+)''')
+
 conn.commit()
 conn.close()
 
@@ -291,29 +305,26 @@ async def add_artist(interaction: discord.Interaction, artist: str):
     artist_id = get_artist_id(resp)
     artist_name = artist
 
-    c.execute('SELECT artist_id FROM artists WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id))
+    c.execute('SELECT artist_id FROM artists WHERE artist_id = ?', (artist_id,))
     existing_entry = c.fetchone()
 
     if existing_entry is None:
         # Fetch the latest track ID from SoundCloud API for this artist
         latest_track_id = get_latest_track_id(artist_id)
         if latest_track_id is None:
-            await interaction.response.send_message(f"Failed to fetch the latest track ID for ***{artist_id}***.")
+            await interaction.response.send_message(f"Failed to fetch the latest track ID for ***{artist_name}***.")
             return
 
-        # Convert guild_id and artist_id to int
-        guild_id = int(guild_id)
-        artist_id = int(artist_id)
         # Convert latest_track_id to int if it is not None
         latest_track_id = int(latest_track_id) if latest_track_id else None
 
-        c.execute('INSERT INTO artists (guild_id, artist_id, latest_track_id, artist_name) VALUES (?, ?, ?, ?)', (guild_id, artist_id, latest_track_id, artist_name))
-        conn.commit()
-        await interaction.response.send_message(content=f"Added ***{artist_name}*** to the list of custom artists for this server.")
-    else:
-        await interaction.response.send_message(content=f"***{artist_name}*** is already in the list of custom artists for this server.")
-
+        c.execute('INSERT INTO artists (artist_id, latest_track_id, artist_name) VALUES (?, ?, ?)', (artist_id, latest_track_id, artist_name))
+    
+    # Insert guild_id into artist_guilds
+    c.execute('INSERT OR IGNORE INTO artist_guilds (artist_id, guild_id) VALUES (?, ?)', (artist_id, guild_id))
+    conn.commit()
     conn.close()
+    await interaction.response.send_message(content=f"Added ***{artist_name}*** to the list of custom artists for this server.")
 
 # Removes a custom artist from the guild's list
 @client.tree.command(name='remove', description='Remove a custom artist from the list for this server')
@@ -324,11 +335,17 @@ async def remove_artist(interaction: discord.Interaction, artist: str):
     c = conn.cursor()
 
     # Get artist ID based on the artist's name
-    c.execute('SELECT artist_id FROM artists WHERE guild_id = ? AND artist_name = ?', (guild_id, artist))
+    c.execute('SELECT artist_id FROM artists WHERE artist_name = ?', (artist,))
     artist_id = c.fetchone()
 
     if artist_id:
-        c.execute('DELETE FROM artists WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id[0]))
+        artist_id = artist_id[0]
+        c.execute('DELETE FROM artist_guilds WHERE guild_id = ? AND artist_id = ?', (guild_id, artist_id))
+        # Check if the artist is still mapped to any guilds
+        c.execute('SELECT COUNT(*) FROM artist_guilds WHERE artist_id = ?', (artist_id,))
+        count = c.fetchone()[0]
+        if count == 0:
+            c.execute('DELETE FROM artists WHERE artist_id = ?', (artist_id,))
         conn.commit()
         conn.close()
         await interaction.response.send_message(f"Removed ***{artist}*** from the list of custom artists for this server.")
@@ -341,9 +358,12 @@ async def list_artists(interaction: discord.Interaction):
     guild_id = interaction.guild.id
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute('SELECT artist_name FROM artists WHERE guild_id = ?', (guild_id,))
+    c.execute('''SELECT a.artist_name 
+                 FROM artists a 
+                 JOIN artist_guilds ag ON a.artist_id = ag.artist_id 
+                 WHERE ag.guild_id = ?''', (guild_id,))
     artist_names = [row[0] for row in c.fetchall()]
-    conn.close()  # Close the connection after fetching data
+    conn.close()
 
     if len(artist_names) == 0:
         await interaction.response.send_message("There are no custom artists added for this server")
@@ -387,13 +407,17 @@ async def check_for_new_tracks(conn):
     async with aiohttp.ClientSession() as session:
         while not client.is_closed():
             try:
-                for guild in client.guilds:
-                    guild_id = guild.id
-                    c.execute('SELECT artist_id FROM artists WHERE guild_id = ?', (guild_id,))
+                c.execute('SELECT DISTINCT guild_id FROM artist_guilds')
+                guild_ids = [row[0] for row in c.fetchall()]
+                for guild_id in guild_ids:
+                    c.execute('''SELECT a.artist_id 
+                                 FROM artists a 
+                                 JOIN artist_guilds agm ON a.artist_id = agm.artist_id 
+                                 WHERE agm.guild_id = ?''', (guild_id,))
                     artist_ids = [row[0] for row in c.fetchall()]
 
                     for artist_id in artist_ids:
-                        await check_artist_tracks(session, conn, guild_id, artist_id)  # Pass the connection to check_artist_tracks
+                        await check_artist_tracks(session, conn, guild_id, artist_id)
             except Exception as e:
                 print(f"Error during track checking: {e}")
 
@@ -408,16 +432,14 @@ async def on_ready():
     c = conn.cursor()
 
     # Fetch and store the latest track ID for each artist in the database
-    for guild in client.guilds:
-        guild_id = guild.id
-        c.execute('SELECT artist_id FROM artists WHERE guild_id = ?', (guild_id,))
-        artist_ids = [row[0] for row in c.fetchall()]
+    c.execute('SELECT artist_id FROM artists')
+    artist_ids = [row[0] for row in c.fetchall()]
 
-        for artist_id in artist_ids:
-            latest_track_id = get_latest_track_id(artist_id)
-            if latest_track_id is not None:
-                c.execute('UPDATE artists SET latest_track_id = ? WHERE guild_id = ? AND artist_id = ?', (latest_track_id, guild_id, artist_id))
-                conn.commit()
+    for artist_id in artist_ids:
+        latest_track_id = get_latest_track_id(artist_id)
+        if latest_track_id is not None:
+            c.execute('UPDATE artists SET latest_track_id = ? WHERE artist_id = ?', (latest_track_id, artist_id))
+            conn.commit()
 
     # Syncing slash commands 
     try:
@@ -427,7 +449,7 @@ async def on_ready():
         print(e)
         
     # Start the background task to check for new tracks
-    client.loop.create_task(check_for_new_tracks(conn))  # Pass the connection to the background task
+    client.loop.create_task(check_for_new_tracks(conn))
 
     print("Database Connection Status:", conn is not None)
 
