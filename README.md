@@ -13,7 +13,7 @@
 
 ## Todo
 
-- [ ] When initial track amount = 0, store previous_track_id as NULL & add handling to checking
+- [x] When initial track amount = 0, store previous_track_id as NULL & add handling to checking
 - [ ] Add ability to 'link' commands to /help embed
 - [x] Fix and handle Database locking (important) 
 - [x] Change database schema to remove dups which increases performance.
