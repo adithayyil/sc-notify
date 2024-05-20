@@ -169,7 +169,7 @@ async def send_data(guild_id, track_data):
         track_authID = track_data.get('track_authorization')
         stream_url_unauthorized = track_data['media']['transcodings'][1]['url']
         stream_url = authorize_stream_url(stream_url_unauthorized, track_authID)
-
+        # TODO: CLEAN THIS SHIT UP NEXT TIME LOL
         async with aiohttp.ClientSession() as session:
             async with session.get(stream_url) as response:
                 if response.status == 200:
@@ -177,12 +177,22 @@ async def send_data(guild_id, track_data):
                         song_file.write(await response.read())
                     try:
                         with open(f"{encoded_file_name}.txt", "rb") as data_file, open(f"{encoded_file_name}.mp3", "rb") as song_file:
-                            files = [
-                                discord.File(data_file, filename=f"{track_artist} - {track_title}.txt"),
-                                discord.File(song_file, filename=f"{track_title}.mp3")
-                            ]
-                            await target_channel.send(f"New track from **{track_artist}**!\n{track_url}", 
-                                                      files=files)
+                            song_file_size = os.path.getsize(f"{encoded_file_name}.mp3")
+                            max_file_size = 25 * 1024 * 1024 
+                            if song_file_size > max_file_size:
+                                files = [
+                                    discord.File(data_file, filename=f"{track_artist} - {track_title}.txt")
+                                ]
+                                await target_channel.send(f"New track from **{track_artist}**!\n{track_url}", 
+                                                        files=files)
+                                await target_channel.send(f"The track **{track_title}** by **{track_artist}** is too large to be sent!")
+                            else:
+                                files = [
+                                    discord.File(data_file, filename=f"{track_artist} - {track_title}.txt"),
+                                    discord.File(song_file, filename=f"{track_title}.mp3")
+                                ]
+                                await target_channel.send(f"New track from **{track_artist}**!\n{track_url}", 
+                                                        files=files)
                         os.remove(f"{encoded_file_name}.txt")
                         os.remove(f"{encoded_file_name}.mp3")
                     except Exception as e:
